@@ -494,6 +494,7 @@ const COLS = {
 let data = [];
 let byName = new Map();
 let selectedName = "";
+let searchQuery = ""; // texto digitado no campo de busca
 let selectedRecord = null;
 let lastCalc = null;
 
@@ -571,8 +572,22 @@ function buildIndex(records){
 function renderButtons(filter=""){
   el.mpButtons.innerHTML = "";
   const names = Array.from(byName.keys());
-  const f = filter.trim().toLowerCase();
-  const filtered = f ? names.filter(n => n.toLowerCase().includes(f)) : names;
+  const f = (filter || "").trim().toLowerCase();
+
+  const isNum = f && /^\d+$/.test(f);
+  const apply = isNum ? (f.length >= 1) : (f.length >= 2);
+
+  const filtered = (!apply) ? names : names.filter(name => {
+    const n = name.toLowerCase();
+    if(n.includes(f)) return true;
+    const recs = byName.get(name) || [];
+    // Busca também por código/descrição dentro da MP
+    return recs.some(r => {
+      const codigo = safeText(r[COLS.B]).toLowerCase();
+      const desc = safeText(r[COLS.C]).toLowerCase();
+      return codigo.includes(f) || desc.includes(f);
+    });
+  });
 
   el.mpCount.textContent = `MPs: ${filtered.length}`;
   el.rowCount.textContent = `Registros: ${data.length}`;
@@ -591,6 +606,7 @@ function renderButtons(filter=""){
   el.mpButtons.appendChild(frag);
 }
 
+
 function resetSelection(){
   selectedName = "";
   selectedRecord = null;
@@ -608,7 +624,7 @@ function resetSelection(){
   el.dCurrent.value = '';
   el.dCurrent.disabled = true;
 
-  el.calcBtn.disabled = true;
+  if(el.calcBtn) el.calcBtn.disabled = true;
   el.printBtn.disabled = true;
 
   el.calcOut.style.display = 'none';
@@ -627,10 +643,33 @@ function selectName(name){
   lastCalc = null;
 
   const records = byName.get(name) || [];
-  el.codeSelect.innerHTML = `<option value="">Selecione o Código + Descrição…</option>`;
+  populateCodeSelect(records, searchQuery);
+  el.codeSelect.disabled = false;
 
+  el.details.style.display = 'none';
+  el.dCurrent.value = '';
+  el.dCurrent.disabled = true;
+  if(el.calcBtn) el.calcBtn.disabled = true;
+  el.printBtn.disabled = true;
+  el.calcOut.style.display = 'none';
+
+  setCalcWarn('');
+  renderButtons(el.searchMp.value || '');
+}
+
+function populateCodeSelect(records, filterText){
+  const f = (filterText || '').trim().toLowerCase();
+  const isNum = f && /^\d+$/.test(f);
+  const apply = isNum ? (f.length >= 1) : (f.length >= 2);
+
+  el.codeSelect.innerHTML = `<option value="">Selecione o Código + Descrição…</option>`;
   const frag = document.createDocumentFragment();
   records.forEach((r, idx) => {
+    if(apply){
+      const codigo = safeText(r[COLS.B]).toLowerCase();
+      const desc = safeText(r[COLS.C]).toLowerCase();
+      if(!codigo.includes(f) && !desc.includes(f)) return;
+    }
     const opt = document.createElement('option');
     opt.value = String(idx);
     opt.textContent = `${safeText(r[COLS.B])} — ${safeText(r[COLS.C])}`;
@@ -638,17 +677,51 @@ function selectName(name){
   });
   el.codeSelect.appendChild(frag);
   el.codeSelect.disabled = false;
-
-  el.details.style.display = 'none';
-  el.dCurrent.value = '';
-  el.dCurrent.disabled = true;
-  el.calcBtn.disabled = true;
-  el.printBtn.disabled = true;
-  el.calcOut.style.display = 'none';
-
-  setCalcWarn('');
-  renderButtons(el.searchMp.value || '');
 }
+
+function shouldApplySearch(f){
+  const q = (f || '').trim();
+  if(!q) return false;
+  const isNum = /^\d+$/.test(q);
+  return isNum ? (q.length >= 1) : (q.length >= 2);
+}
+
+function findMatchesGlobal(q){
+  const f = q.trim().toLowerCase();
+  if(!shouldApplySearch(f)) return [];
+  const matches = [];
+  for(const [name, recs] of byName.entries()){
+    recs.forEach((r, idx) => {
+      const codigo = safeText(r[COLS.B]).toLowerCase();
+      const desc = safeText(r[COLS.C]).toLowerCase();
+      if(codigo.includes(f) || desc.includes(f) || name.toLowerCase().includes(f))
+        matches.push({ name, idx });
+    });
+  }
+  return matches;
+}
+
+function tryAutoSelectFromSearch(){
+  const q = (searchQuery || '').trim();
+  if(!shouldApplySearch(q)) return;
+  const qLower = q.toLowerCase();
+  const isNum = /^\d+$/.test(qLower);
+
+  const matches = findMatchesGlobal(qLower);
+  if(matches.length !== 1) return;
+  const m = matches[0];
+
+  // Segurança: se for busca numérica, só auto-seleciona se for código exato
+  if(isNum){
+    const codigoFull = safeText((byName.get(m.name) || [])[m.idx]?.[COLS.B] || '');
+    if(codigoFull && codigoFull !== q) return;
+  }
+
+  if(selectedName !== m.name) selectName(m.name);
+  el.codeSelect.value = String(m.idx);
+  selectRecordByIndex(m.idx);
+}
+
 
 function selectRecordByIndex(idx){
   const records = byName.get(selectedName) || [];
@@ -658,7 +731,7 @@ function selectRecordByIndex(idx){
   if(!selectedRecord){
     el.details.style.display = 'none';
     el.dCurrent.disabled = true;
-    el.calcBtn.disabled = true;
+    if(el.calcBtn) el.calcBtn.disabled = true;
     el.printBtn.disabled = true;
     return;
   }
@@ -670,7 +743,7 @@ function selectRecordByIndex(idx){
 
   el.details.style.display = 'grid';
   el.dCurrent.disabled = false;
-  el.calcBtn.disabled = false;
+  if(el.calcBtn) el.calcBtn.disabled = false;
   el.printBtn.disabled = true;
   el.dCurrent.focus();
 }
@@ -801,8 +874,8 @@ function buildLabelHTML(machine){
         <div class="labelRow"><b>Diâmetro atual:</b> ${lastCalc.dAtual} mm</div>
         <div class="labelRow"><b>Diâmetro novo:</b> ${lastCalc.dNovo} mm</div>
         <div class="labelRow"><b>Tubete:</b> ${lastCalc.dTubete} mm</div>
-        ${loteInterno ? `<div class=\"labelRow\"><b>Lote interno:</b> ${loteInterno}</div>` : ''}
-        <div class=\"labelRow\"><b>Responsável:</b> ${responsavel || '—'}</div>
+        ${loteInterno ? `<div class="labelRow"><b>Lote interno:</b> ${loteInterno}</div>` : ''}
+        <div class="labelRow"><b>Responsável:</b> ${responsavel || '—'}</div>
         <div class="labelBig">Sobra: ${sobraTxt}</div>
       </div>
     </div>
@@ -857,7 +930,17 @@ el.toggleSearch.addEventListener('click', () => {
   if(show) setTimeout(()=>el.searchMp.focus(), 50);
 });
 
-el.searchMp.addEventListener('input', () => renderButtons(el.searchMp.value));
+el.searchMp.addEventListener('input', () => {
+  searchQuery = el.searchMp.value || '';
+  renderButtons(searchQuery);
+  // Se uma MP já estiver selecionada, filtra o combo de códigos também
+  if(selectedName){
+    const recs = byName.get(selectedName) || [];
+    populateCodeSelect(recs, searchQuery);
+  }
+  // Tenta auto-selecionar somente quando for seguro (match único)
+  tryAutoSelectFromSearch();
+});
 el.clearBtn.addEventListener('click', resetSelection);
 
 // Ao clicar importar: abre ajudinha e depois seletor de arquivos
@@ -915,7 +998,7 @@ el.codeSelect.addEventListener('change', (e) => {
     lastCalc = null;
     el.details.style.display = 'none';
     el.dCurrent.disabled = true;
-    el.calcBtn.disabled = true;
+    if(el.calcBtn) el.calcBtn.disabled = true;
     el.printBtn.disabled = true;
     el.calcOut.style.display = 'none';
     return;
@@ -1015,6 +1098,7 @@ function tryAutoCalcFinal(){
 
 el.dCurrent.addEventListener('input', () => tryAutoCalcSoft());
 el.dCurrent.addEventListener('change', () => tryAutoCalcFinal());
+
 el.printBtn.addEventListener('click', openPrintModal);
 el.cancelPrint.addEventListener('click', closePrintModal);
 el.modalBackdrop.addEventListener('click', (ev) => { if(ev.target === el.modalBackdrop) closePrintModal(); });
