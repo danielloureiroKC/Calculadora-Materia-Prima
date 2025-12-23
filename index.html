@@ -579,9 +579,12 @@ function renderButtons(filter=""){
 
   const filtered = (!apply) ? names : names.filter(name => {
     const n = name.toLowerCase();
+    // Se for texto: filtra somente pelo nome da MP
+    if(!isNum) return n.includes(f);
+
+    // Se for numérico: filtra por código/descrição e também por nome
     if(n.includes(f)) return true;
     const recs = byName.get(name) || [];
-    // Busca também por código/descrição dentro da MP
     return recs.some(r => {
       const codigo = safeText(r[COLS.B]).toLowerCase();
       const desc = safeText(r[COLS.C]).toLowerCase();
@@ -612,6 +615,10 @@ function resetSelection(){
   selectedRecord = null;
   lastCalc = null;
 
+  // Limpa também o campo de busca (para o botão funcionar como o operador espera)
+  searchQuery = '';
+  el.searchMp.value = '';
+
   el.codeSelect.innerHTML = `<option value="">Selecione uma MP primeiro…</option>`;
   el.codeSelect.disabled = true;
 
@@ -634,7 +641,7 @@ function resetSelection(){
   setWarn('');
   setCalcWarn('');
 
-  renderButtons(el.searchMp.value || '');
+  renderButtons('');
 }
 
 function selectName(name){
@@ -643,7 +650,11 @@ function selectName(name){
   lastCalc = null;
 
   const records = byName.get(name) || [];
-  populateCodeSelect(records, searchQuery);
+
+  // Se o usuário estiver buscando por CÓDIGO (numérico), filtra o combo. Se for nome/texto, mantém todos os códigos visíveis.
+  const q = (searchQuery || '').trim();
+  const qIsNum = /^\d+$/.test(q);
+  populateCodeSelect(records, qIsNum ? q : '');
   el.codeSelect.disabled = false;
 
   el.details.style.display = 'none';
@@ -679,43 +690,22 @@ function populateCodeSelect(records, filterText){
   el.codeSelect.disabled = false;
 }
 
-function shouldApplySearch(f){
-  const q = (f || '').trim();
-  if(!q) return false;
-  const isNum = /^\d+$/.test(q);
-  return isNum ? (q.length >= 1) : (q.length >= 2);
-}
+function tryAutoSelectFromSearch(){
+  const q = (searchQuery || '').trim();
+  // Auto-seleção recomendada apenas para busca numérica (código)
+  if(!/^\d+$/.test(q)) return;
+  if(q.length < 1) return;
 
-function findMatchesGlobal(q){
-  const f = q.trim().toLowerCase();
-  if(!shouldApplySearch(f)) return [];
   const matches = [];
   for(const [name, recs] of byName.entries()){
     recs.forEach((r, idx) => {
-      const codigo = safeText(r[COLS.B]).toLowerCase();
-      const desc = safeText(r[COLS.C]).toLowerCase();
-      if(codigo.includes(f) || desc.includes(f) || name.toLowerCase().includes(f))
-        matches.push({ name, idx });
+      const codigo = safeText(r[COLS.B]);
+      if(codigo === q) matches.push({ name, idx });
     });
   }
-  return matches;
-}
 
-function tryAutoSelectFromSearch(){
-  const q = (searchQuery || '').trim();
-  if(!shouldApplySearch(q)) return;
-  const qLower = q.toLowerCase();
-  const isNum = /^\d+$/.test(qLower);
-
-  const matches = findMatchesGlobal(qLower);
   if(matches.length !== 1) return;
   const m = matches[0];
-
-  // Segurança: se for busca numérica, só auto-seleciona se for código exato
-  if(isNum){
-    const codigoFull = safeText((byName.get(m.name) || [])[m.idx]?.[COLS.B] || '');
-    if(codigoFull && codigoFull !== q) return;
-  }
 
   if(selectedName !== m.name) selectName(m.name);
   el.codeSelect.value = String(m.idx);
@@ -933,13 +923,16 @@ el.toggleSearch.addEventListener('click', () => {
 el.searchMp.addEventListener('input', () => {
   searchQuery = el.searchMp.value || '';
   renderButtons(searchQuery);
-  // Se uma MP já estiver selecionada, filtra o combo de códigos também
+
+  const q = searchQuery.trim();
+  const qIsNum = /^\d+$/.test(q);
+
   if(selectedName){
     const recs = byName.get(selectedName) || [];
-    populateCodeSelect(recs, searchQuery);
+    populateCodeSelect(recs, qIsNum ? q : '');
   }
-  // Tenta auto-selecionar somente quando for seguro (match único)
-  tryAutoSelectFromSearch();
+
+  if(qIsNum) tryAutoSelectFromSearch();
 });
 el.clearBtn.addEventListener('click', resetSelection);
 
