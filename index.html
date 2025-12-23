@@ -264,9 +264,11 @@
     </div>
 
     <div class="row" style="margin-top:10px;">
-      <div class="col"><button id="calcBtn" class="btn ok" disabled>Calcular sobra</button></div>
       <div class="col"><button id="printBtn" class="btn secondary" disabled>Imprimir etiqueta de devolução</button></div>
     </div>
+
+    <!-- calcBtn removido: cálculo é automático -->
+    <button id="calcBtn" class="btn ok" style="display:none" disabled>Calcular sobra</button>
 
     <div id="calcOut" style="display:none;">
       <div class="result" id="resultText"></div>
@@ -308,6 +310,12 @@
       <option>FB12</option><option>FB14</option><option>FB15</option><option>FB16</option><option>FB17</option>
       <option>PH01</option><option>PH02</option>
     </select>
+
+    <label>Lote interno (opcional)</label>
+    <input id="lotInternal" type="text" placeholder="Ex.: 12345" />
+
+    <label>Responsável pela etiqueta</label>
+    <input id="madeBy" type="text" placeholder="Seu nome" />
 
     <div id="labelArea"></div>
 
@@ -523,6 +531,8 @@ const el = {
 
   modalBackdrop: document.getElementById('modalBackdrop'),
   machineSelect: document.getElementById('machineSelect'),
+  lotInternal: document.getElementById('lotInternal'),
+  madeBy: document.getElementById('madeBy'),
   labelArea: document.getElementById('labelArea'),
   cancelPrint: document.getElementById('cancelPrint'),
   doPrint: document.getElementById('doPrint'),
@@ -598,7 +608,7 @@ function resetSelection(){
   el.dCurrent.value = '';
   el.dCurrent.disabled = true;
 
-  el.calcBtn.disabled = true;
+  if(el.calcBtn) el.calcBtn.disabled = true;
   el.printBtn.disabled = true;
 
   el.calcOut.style.display = 'none';
@@ -632,7 +642,7 @@ function selectName(name){
   el.details.style.display = 'none';
   el.dCurrent.value = '';
   el.dCurrent.disabled = true;
-  el.calcBtn.disabled = true;
+  if(el.calcBtn) el.calcBtn.disabled = true;
   el.printBtn.disabled = true;
   el.calcOut.style.display = 'none';
 
@@ -648,7 +658,7 @@ function selectRecordByIndex(idx){
   if(!selectedRecord){
     el.details.style.display = 'none';
     el.dCurrent.disabled = true;
-    el.calcBtn.disabled = true;
+    if(el.calcBtn) el.calcBtn.disabled = true;
     el.printBtn.disabled = true;
     return;
   }
@@ -660,13 +670,17 @@ function selectRecordByIndex(idx){
 
   el.details.style.display = 'grid';
   el.dCurrent.disabled = false;
-  el.calcBtn.disabled = false;
+  if(el.calcBtn) el.calcBtn.disabled = false;
   el.printBtn.disabled = true;
   el.dCurrent.focus();
 }
 
 function doCalc(){
   setCalcWarn('');
+  if(!safeText(el.dCurrent.value)){
+    clearCalcAndPrint();
+    return;
+  }
   if(!selectedRecord){
     setCalcWarn('Selecione um Código + Descrição.');
     return;
@@ -764,6 +778,9 @@ function buildLabelHTML(machine){
   const dt = lastCalc.createdAt;
   const dateStr = dt.toLocaleString('pt-BR');
   const sobraTxt = `${formatNumberPT(lastCalc.sobra,2)} ${lastCalc.um}`.trim();
+  const loteInterno = safeText(el.lotInternal?.value || '');
+  const responsavel = safeText(el.madeBy?.value || '');
+
 
   return `
     <div class="label">
@@ -784,6 +801,8 @@ function buildLabelHTML(machine){
         <div class="labelRow"><b>Diâmetro atual:</b> ${lastCalc.dAtual} mm</div>
         <div class="labelRow"><b>Diâmetro novo:</b> ${lastCalc.dNovo} mm</div>
         <div class="labelRow"><b>Tubete:</b> ${lastCalc.dTubete} mm</div>
+        ${loteInterno ? `<div class=\"labelRow\"><b>Lote interno:</b> ${loteInterno}</div>` : ''}
+        <div class=\"labelRow\"><b>Responsável:</b> ${responsavel || '—'}</div>
         <div class="labelBig">Sobra: ${sobraTxt}</div>
       </div>
     </div>
@@ -896,7 +915,7 @@ el.codeSelect.addEventListener('change', (e) => {
     lastCalc = null;
     el.details.style.display = 'none';
     el.dCurrent.disabled = true;
-    el.calcBtn.disabled = true;
+    if(el.calcBtn) el.calcBtn.disabled = true;
     el.printBtn.disabled = true;
     el.calcOut.style.display = 'none';
     return;
@@ -904,17 +923,75 @@ el.codeSelect.addEventListener('change', (e) => {
   selectRecordByIndex(parseInt(v,10));
 });
 
-el.calcBtn.addEventListener('click', doCalc);
-[el.qtyEdit, el.dNewEdit, el.dCoreEdit, el.dCurrent].forEach(inp => {
-  inp.addEventListener('input', () => {
-    if(!el.calcBtn.disabled && safeText(el.dCurrent.value) !== '') doCalc();
-  });
+// calcBtn removido: cálculo agora é automático
+
+function clearCalcAndPrint(){
+  el.printBtn.disabled = true;
+  el.calcOut.style.display = 'none';
+  el.resultText.textContent = '';
+  el.formulaNote.textContent = '';
+}
+
+function validateDiametroAtual(opts={prompt:false}){
+  const prompt = !!opts.prompt;
+  const dStr = safeText(el.dCurrent.value);
+  if(dStr===''){
+    setCalcWarn('');
+    return false;
+  }
+  const dAtual = numOrZero(dStr);
+  const dMax = numOrZero(el.dNewEdit.value);
+  const dTubete = numOrZero(el.dCoreEdit.value);
+
+  if(dTubete>0 && dAtual>0 && dAtual < dTubete){
+    const msg = `Erro: valor (${dAtual} mm) menor que o diâmetro do tubete (${dTubete} mm). Confira.`;
+    setCalcWarn(msg);
+    if(prompt) alert(msg);
+    el.dCurrent.value = '';
+    el.dCurrent.focus();
+    return false;
+  }
+
+  if(dMax>0 && dAtual> dMax){
+    const msg = `Valor maior que o diâmetro máximo (${dMax} mm) e será setado o máximo se você der OK.`;
+    setCalcWarn(msg);
+    if(prompt){
+      const ok = confirm(msg);
+      if(ok){
+        el.dCurrent.value = String(dMax);
+        setCalcWarn(`Ajustado para o máximo (${dMax} mm).`);
+        return true;
+      }
+      el.dCurrent.value = '';
+      el.dCurrent.focus();
+      return false;
+    }
+    return false;
+  }
+
+  setCalcWarn('');
+  return true;
+}
+
+function tryAutoCalc(opts={prompt:false}){
+  if(!selectedRecord){ clearCalcAndPrint(); return; }
+  if(!safeText(el.dCurrent.value)){ clearCalcAndPrint(); return; }
+  if(!validateDiametroAtual(opts)){ clearCalcAndPrint(); return; }
+  doCalc();
+}
+
+[el.qtyEdit, el.dNewEdit, el.dCoreEdit].forEach(inp => {
+  inp.addEventListener('input', () => tryAutoCalc({prompt:false}));
 });
 
+el.dCurrent.addEventListener('input', () => tryAutoCalc({prompt:false}));
+el.dCurrent.addEventListener('change', () => tryAutoCalc({prompt:true}));
 el.printBtn.addEventListener('click', openPrintModal);
 el.cancelPrint.addEventListener('click', closePrintModal);
 el.modalBackdrop.addEventListener('click', (ev) => { if(ev.target === el.modalBackdrop) closePrintModal(); });
 el.machineSelect.addEventListener('change', () => { el.labelArea.innerHTML = buildLabelHTML(safeText(el.machineSelect.value)); });
+if(el.lotInternal) el.lotInternal.addEventListener('input', () => { el.labelArea.innerHTML = buildLabelHTML(safeText(el.machineSelect.value)); });
+if(el.madeBy) el.madeBy.addEventListener('input', () => { el.labelArea.innerHTML = buildLabelHTML(safeText(el.machineSelect.value)); });
 el.doPrint.addEventListener('click', doPrint);
 
 /** Init */
