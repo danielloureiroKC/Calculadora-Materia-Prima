@@ -267,7 +267,7 @@
       <div class="col"><button id="printBtn" class="btn secondary" disabled>Imprimir etiqueta de devolução</button></div>
     </div>
 
-    <!-- calcBtn removido: cálculo é automático -->
+    <!-- calcBtn removido da UI: cálculo é automático -->
     <button id="calcBtn" class="btn ok" style="display:none" disabled>Calcular sobra</button>
 
     <div id="calcOut" style="display:none;">
@@ -608,7 +608,7 @@ function resetSelection(){
   el.dCurrent.value = '';
   el.dCurrent.disabled = true;
 
-  if(el.calcBtn) el.calcBtn.disabled = true;
+  el.calcBtn.disabled = true;
   el.printBtn.disabled = true;
 
   el.calcOut.style.display = 'none';
@@ -642,7 +642,7 @@ function selectName(name){
   el.details.style.display = 'none';
   el.dCurrent.value = '';
   el.dCurrent.disabled = true;
-  if(el.calcBtn) el.calcBtn.disabled = true;
+  el.calcBtn.disabled = true;
   el.printBtn.disabled = true;
   el.calcOut.style.display = 'none';
 
@@ -658,7 +658,7 @@ function selectRecordByIndex(idx){
   if(!selectedRecord){
     el.details.style.display = 'none';
     el.dCurrent.disabled = true;
-    if(el.calcBtn) el.calcBtn.disabled = true;
+    el.calcBtn.disabled = true;
     el.printBtn.disabled = true;
     return;
   }
@@ -670,7 +670,7 @@ function selectRecordByIndex(idx){
 
   el.details.style.display = 'grid';
   el.dCurrent.disabled = false;
-  if(el.calcBtn) el.calcBtn.disabled = false;
+  el.calcBtn.disabled = false;
   el.printBtn.disabled = true;
   el.dCurrent.focus();
 }
@@ -678,7 +678,7 @@ function selectRecordByIndex(idx){
 function doCalc(){
   setCalcWarn('');
   if(!safeText(el.dCurrent.value)){
-    clearCalcAndPrint();
+    if(typeof clearCalcAndPrint === 'function') clearCalcAndPrint();
     return;
   }
   if(!selectedRecord){
@@ -778,9 +778,9 @@ function buildLabelHTML(machine){
   const dt = lastCalc.createdAt;
   const dateStr = dt.toLocaleString('pt-BR');
   const sobraTxt = `${formatNumberPT(lastCalc.sobra,2)} ${lastCalc.um}`.trim();
+
   const loteInterno = safeText(el.lotInternal?.value || '');
   const responsavel = safeText(el.madeBy?.value || '');
-
 
   return `
     <div class="label">
@@ -915,7 +915,7 @@ el.codeSelect.addEventListener('change', (e) => {
     lastCalc = null;
     el.details.style.display = 'none';
     el.dCurrent.disabled = true;
-    if(el.calcBtn) el.calcBtn.disabled = true;
+    el.calcBtn.disabled = true;
     el.printBtn.disabled = true;
     el.calcOut.style.display = 'none';
     return;
@@ -932,8 +932,33 @@ function clearCalcAndPrint(){
   el.formulaNote.textContent = '';
 }
 
-function validateDiametroAtual(opts={prompt:false}){
-  const prompt = !!opts.prompt;
+// Checagem suave (não bloqueia digitação): apenas orienta e impede liberar impressão/cálculo enquanto estiver fora dos limites.
+function softCheckDiametroAtual(){
+  const dStr = safeText(el.dCurrent.value);
+  if(dStr===''){
+    setCalcWarn('');
+    return false;
+  }
+  const dAtual = numOrZero(dStr);
+  const dMax = numOrZero(el.dNewEdit.value);
+  const dTubete = numOrZero(el.dCoreEdit.value);
+
+  if(dTubete>0 && dAtual>0 && dAtual < dTubete){
+    setCalcWarn(`Atenção: ${dAtual} mm está menor que o tubete (${dTubete} mm). Termine de digitar para validar.`);
+    return false;
+  }
+
+  if(dMax>0 && dAtual > dMax){
+    setCalcWarn(`Atenção: ${dAtual} mm está maior que o diâmetro máximo (${dMax} mm). Termine de digitar para validar.`);
+    return false;
+  }
+
+  setCalcWarn('');
+  return true;
+}
+
+// Validação final (ao finalizar a edição): pode abrir pop-up e ajustar/limpar conforme regra.
+function validateDiametroAtualFinal(){
   const dStr = safeText(el.dCurrent.value);
   if(dStr===''){
     setCalcWarn('');
@@ -946,26 +971,23 @@ function validateDiametroAtual(opts={prompt:false}){
   if(dTubete>0 && dAtual>0 && dAtual < dTubete){
     const msg = `Erro: valor (${dAtual} mm) menor que o diâmetro do tubete (${dTubete} mm). Confira.`;
     setCalcWarn(msg);
-    if(prompt) alert(msg);
+    alert(msg);
     el.dCurrent.value = '';
     el.dCurrent.focus();
     return false;
   }
 
-  if(dMax>0 && dAtual> dMax){
+  if(dMax>0 && dAtual > dMax){
     const msg = `Valor maior que o diâmetro máximo (${dMax} mm) e será setado o máximo se você der OK.`;
     setCalcWarn(msg);
-    if(prompt){
-      const ok = confirm(msg);
-      if(ok){
-        el.dCurrent.value = String(dMax);
-        setCalcWarn(`Ajustado para o máximo (${dMax} mm).`);
-        return true;
-      }
-      el.dCurrent.value = '';
-      el.dCurrent.focus();
-      return false;
+    const ok = confirm(msg);
+    if(ok){
+      el.dCurrent.value = String(dMax);
+      setCalcWarn(`Ajustado para o máximo (${dMax} mm).`);
+      return true;
     }
+    el.dCurrent.value = '';
+    el.dCurrent.focus();
     return false;
   }
 
@@ -973,19 +995,26 @@ function validateDiametroAtual(opts={prompt:false}){
   return true;
 }
 
-function tryAutoCalc(opts={prompt:false}){
+function tryAutoCalcSoft(){
   if(!selectedRecord){ clearCalcAndPrint(); return; }
   if(!safeText(el.dCurrent.value)){ clearCalcAndPrint(); return; }
-  if(!validateDiametroAtual(opts)){ clearCalcAndPrint(); return; }
+  if(!softCheckDiametroAtual()){ clearCalcAndPrint(); return; }
+  doCalc();
+}
+
+function tryAutoCalcFinal(){
+  if(!selectedRecord){ clearCalcAndPrint(); return; }
+  if(!safeText(el.dCurrent.value)){ clearCalcAndPrint(); return; }
+  if(!validateDiametroAtualFinal()){ clearCalcAndPrint(); return; }
   doCalc();
 }
 
 [el.qtyEdit, el.dNewEdit, el.dCoreEdit].forEach(inp => {
-  inp.addEventListener('input', () => tryAutoCalc({prompt:false}));
+  inp.addEventListener('input', () => tryAutoCalcSoft());
 });
 
-el.dCurrent.addEventListener('input', () => tryAutoCalc({prompt:false}));
-el.dCurrent.addEventListener('change', () => tryAutoCalc({prompt:true}));
+el.dCurrent.addEventListener('input', () => tryAutoCalcSoft());
+el.dCurrent.addEventListener('change', () => tryAutoCalcFinal());
 el.printBtn.addEventListener('click', openPrintModal);
 el.cancelPrint.addEventListener('click', closePrintModal);
 el.modalBackdrop.addEventListener('click', (ev) => { if(ev.target === el.modalBackdrop) closePrintModal(); });
